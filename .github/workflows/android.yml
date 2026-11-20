@@ -17,25 +17,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Получаем исходники проекта
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      # 2. Устанавливаем Java
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      # 3. Находим Android SDK
       - name: Locate Android SDK
         shell: bash
         run: |
           SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
 
-          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          if [ ! -d "$SDK_ROOT/cmdline-tools" ]; then
+            echo "ERROR: Android SDK cmdline-tools directory not found: $SDK_ROOT"
+            exit 1
+          fi
 
           SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager -print -quit)
 
@@ -44,11 +43,13 @@ jobs:
             exit 1
           fi
 
-          echo "Found sdkmanager: $SDKMANAGER"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
-          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
-      # 4. Принимаем лицензии Android SDK
+          echo "Found SDK: $SDK_ROOT"
+          echo "Found sdkmanager: $SDKMANAGER"
+
       - name: Accept Android SDK licenses
         shell: bash
         run: |
@@ -56,50 +57,58 @@ jobs:
           set +o pipefail
 
           yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses
-
           SDK_STATUS=${PIPESTATUS[1]}
 
           if [ "$SDK_STATUS" -ne 0 ]; then
-            echo "SDK license acceptance failed with code $SDK_STATUS"
+            echo "ERROR: SDK license acceptance failed: $SDK_STATUS"
             exit "$SDK_STATUS"
           fi
 
           echo "Android SDK licenses accepted."
 
-      # 5. Устанавливаем необходимые компоненты
-      - name: Install Android SDK packages
+      - name: Install Android SDK 34
         shell: bash
         run: |
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install \
-            "platforms;android-33" \
-            "build-tools;33.0.2" \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
             "platform-tools"
 
-      # 6. Настраиваем Gradle
-      - name: Setup Gradle
+      - name: Setup Gradle 8.4
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.2'
+          gradle-version: '8.4'
 
-      # 7. Собираем APK
-      - name: Build APK
+      - name: Check project files
+        shell: bash
+        run: |
+          test -f settings.gradle
+          test -f build.gradle
+          test -f app/build.gradle
+          test -f app/src/main/AndroidManifest.xml
+          test -f app/src/main/java/com/prank/wallpaper/MainActivity.java
+          test -f app/src/main/res/drawable-nodpi/wallpaper_img.png
+          test -f app/src/main/res/values/strings.xml
+          test -f app/src/main/res/values/styles.xml
+
+          echo "All required project files found."
+
+      - name: Build Debug APK
         run: gradle --no-daemon assembleDebug
 
-      # 8. Проверяем наличие APK
       - name: Verify APK
         shell: bash
         run: |
           APK="app/build/outputs/apk/debug/app-debug.apk"
 
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: APK was not created!"
+          if [ ! -s "$APK" ]; then
+            echo "ERROR: APK missing or empty!"
             exit 1
           fi
 
           echo "APK successfully created:"
           ls -lh "$APK"
 
-      # 9. Загружаем APK в Artifacts
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
